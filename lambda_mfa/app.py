@@ -1,40 +1,68 @@
 import os
 import json
 import boto3
+from botocore.exceptions import ClientError
+
+ses_client = boto3.client('ses')
 
 def lambda_handler(event, context):
-    # Create SQS client
-    sqs = boto3.client('sqs')
-    
-     # Access environment variables
-    queue_url = os.environ['QUEUE_URL']
-
-    # Receive message from SQS queue
-    sqs_trigger_response = sqs.receive_message(
-        QueueUrl=queue_url,
-        AttributeNames=[
-            'All'
-        ],
-        MaxNumberOfMessages=1,
-        VisibilityTimeout=0,
-        WaitTimeSeconds=0
-    )
-   
-    # Check if messages are received
-    if 'Messages' in sqs_trigger_response:
-        for message in sqs_trigger_response['Messages']:
-            # Print message body to console
-            print("Received message:", message['Body'])
-            
-            # Delete the message from the queue
-            sqs.delete_message(
-                QueueUrl=queue_url,
-                ReceiptHandle=message['ReceiptHandle']
+    try:
+        records = event['Records']
+        for record in records:
+            body = record['body']
+            # Parse the body as a JSON object
+            body_obj = json.loads(body)
+            message = body_obj.get('message', 'No message found')
+            recipient = body_obj['recipient']
+            authCode = body_obj['authCode']
+            subject = "Your One-Time Passcode (OTP)"
+            body_text = f"Your OTP is: {authCode}\n\nPlease do not share this OTP with anyone."
+            body_html = f"""<html>
+            <head></head>
+            <body>
+            <h3>Your OTP is: {authCode}</h3>
+            <p>Use your code to login and do not share this OTP with anyone.</p>
+            </body>
+            </html>"""
+            # Construct the email
+            response = ses_client.send_email(
+                Source="todoeks@outlook.com",
+                Destination={
+                    'ToAddresses': [
+                        recipient,
+                    ],
+                },
+                Message={
+                    'Subject': {
+                        'Charset': 'UTF-8',
+                        'Data': subject,
+                    },
+                    'Body': {
+                        'Text': {
+                            'Data': body_text,
+                        },
+                        'Html': {
+                            'Data': body_html,
+                        },
+                    },
+                }
             )
-    else:
-        print("No messages in the queue")
 
-    return {
-        'statusCode': 200,
-        'body': 'Messages processed successfully'
-    }
+        return {
+            'statusCode': 200,
+            'body': json.dumps({'message': 'Email sent successfully', 'response': response})
+        }
+
+    except ClientError as e:
+        print('Error sending email:', e.response['Error']['Message'])
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'message': 'Failed to send email', 'error': e.response['Error']['Message']})
+        }
+    
+    except Exception as e:
+        print('Error:', e)
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'message': 'Failed to send email', 'error': str(e)})
+        }
